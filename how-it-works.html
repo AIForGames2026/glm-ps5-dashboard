@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How expert swapping works · GLM-5.3-Flash on a 16 GB PS5</title>
+<style>
+:root{--bg:#f6f6f4;--fg:#1b1b1a;--mut:#66665f;--card:#fff;--bd:#e0e0da;--hit:#2e9e5b;--miss:#d9482b;--idle:#d8d8d2;--res:#9db8f2;--acc:#2f5bd3}
+@media (prefers-color-scheme:dark){:root{--bg:#121212;--fg:#ecece8;--mut:#a0a09a;--card:#1c1c1b;--bd:#2d2d2a;--idle:#2a2a28;--res:#3d5aa8;--acc:#7d9cf0}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:24px 16px 64px}h1{font-size:26px;margin:.2em 0}h2{font-size:19px;margin:1.6em 0 .4em}
+p,li{color:var(--fg)}.mut{color:var(--mut)}a{color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin:12px 0}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.cols{grid-template-columns:1fr}}
+canvas{width:100%;height:auto;display:block;border-radius:8px}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:8px 0}label{font-size:14px;color:var(--mut)}
+input[type=range]{width:180px}button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
+.stat{font-size:28px;font-weight:650}.k{font-size:13px;color:var(--mut)}
+table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid var(--bd);padding:6px 8px;text-align:left;vertical-align:top}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+</style></head><body><main>
+<p><a href="./">&larr; Back to the dashboard</a></p>
+<h1>How expert swapping works</h1>
+<p class="mut">GLM-5.3-Flash is a 321B-parameter mixture-of-experts model (18B active per token). It does not fit in a PS5's 16 GB of memory,
+so the engine keeps the always-needed weights resident and <b>streams the experts it needs from the SSD</b>, keeping the popular ones in a memory pool.</p>
+
+<h2>The model, in numbers</h2>
+<div class="card">
+<ul>
+<li>45 layers; each layer has <b>288 routed experts</b> (plus 1 shared) and the router picks <b>8</b> of them for every token.</li>
+<li>Per token that is 45 &times; 8 = 360 expert lookups. Each lookup is either a <span style="color:var(--hit)"><b>hit</b></span> (expert already in memory) or a <span style="color:var(--miss)"><b>miss</b></span> (read it from the SSD, evict the least recently used one).</li>
+<li>Only a fraction of each layer's experts fit in the pool; the dashboard's Monitor tab shows the real pool size and live hit rate. The slider below is a default of 126 of 288 for illustration.</li>
+<li>Speed is bound by SSD reads, so <b>fewer misses per token = faster decoding</b>.</li>
+</ul></div>
+
+<h2>Try it: one layer, token by token</h2>
+<div class="card">
+<p class="mut" style="margin-top:0">Each square is one expert of a layer. Blue = resident in the memory pool, <span style="color:var(--hit)">green</span> = used this token and was a hit,
+<span style="color:var(--miss)">red</span> = used this token and had to be read from the SSD. The router here is <b>synthetic</b> (topics drift every few tokens), so this shows the mechanism, not measured speed.</p>
+<div class="cols">
+ <div><b>Exact routing</b> <span class="mut">(the router's own top-8, always)</span><canvas id="c0" width="480" height="240"></canvas>
+  <div class="row"><div><div class="stat" id="h0">–</div><div class="k">hit rate</div></div><div><div class="stat" id="m0">–</div><div class="k">SSD reads / token</div></div></div></div>
+ <div><b>Cache-aware routing</b> <span class="mut">(small bias toward experts already in memory)</span><canvas id="c1" width="480" height="240"></canvas>
+  <div class="row"><div><div class="stat" id="h1">–</div><div class="k">hit rate</div></div><div><div class="stat" id="m1">–</div><div class="k">SSD reads / token</div></div><div><div class="stat" id="d1">–</div><div class="k">tokens where the expert set changed</div></div></div></div>
+</div>
+<div class="row">
+ <label>Pool size per layer <input id="cap" type="range" min="24" max="288" value="126"> <b id="capv">126</b> of 288</label>
+ <label>Routing bias <input id="bias" type="range" min="0" max="60" value="12"> <b id="biasv">0.12</b></label>
+ <button id="play">Pause</button><button id="reset">Reset</button>
+</div>
+<p class="mut" style="margin-bottom:0">The trade-off is real: a bigger bias means fewer SSD reads but more tokens routed to a different expert than the model would have chosen. The engine's served bias was chosen by measuring output quality against exact routing (see <code>docs/CACHE-AWARE-ROUTING.md</code> and <code>docs/GLM53-ROUTING-POLICY.md</code> in the repository).</p>
+</div>
+
+<h2>How this differs from Strata</h2>
+<p><a href="https://github.com/Niko1221/Strata">Strata</a> is the open-source engine we benchmarked against and borrowed the dashboard design from. It runs the same class of model on desktop-class machines.</p>
+<div class="card"><table>
+<tr><th></th><th>Strata (as published)</th><th>This engine on the PS5</th></tr>
+<tr><td>Where the experts live</td><td>In RAM: published runs keep the whole expert set in 32 GB or more of memory</td><td>On the SSD; a 16 GB unified-memory console holds only a pool of them</td></tr>
+<tr><td>What decides speed</td><td>RAM and GPU compute</td><td>How many experts must be read from the SSD per token (hit rate)</td></tr>
+<tr><td>Routing</td><td>Exact top-k</td><td>Exact, or cache-aware with a measured quality cost</td></tr>
+<tr><td>Tooling in the dashboard</td><td>Chat and monitor</td><td>Plus artifact panel with HTML preview, edit diffs, web fetch, and live prefill/decode speeds</td></tr>
+</table>
+<p class="mut" style="margin-bottom:0">Sources: the repository's <code>reports/PS5 Flash-Next 40 tok-s frontier.md</code> and <code>docs/ARCHITECTURE.md</code>. Real measurements are in the dashboard's Monitor tab when the PS5 is live.</p></div>
+</main>
+<script>
+const N=288,K=8;
+function rng(seed){let s=seed>>>0;return()=>((s=Math.imul(s^s>>>15,2246822507)+0x9e3779b9>>>0)/4294967296)}
+function Sim(biasOn){
+  this.biasOn=biasOn;this.reset();
+}
+Sim.prototype.reset=function(){
+  this.r=rng(7);this.base=Array.from({length:N},()=>this.r());this.topic=new Array(N).fill(0);
+  this.lru=[];this.t=0;this.hits=0;this.miss=0;this.diff=0;this.n=0;this.win=[];this.last={hit:[],miss:[]};
+};
+Sim.prototype.step=function(cap,bias){
+  if(this.t++%8===0)for(let i=0;i<N;i++)this.topic[i]=this.r()<0.4?this.r():this.topic[i]*0.3;
+  const sc=this.base.map((b,i)=>b*0.35+this.topic[i]*0.9+this.r()*0.55);
+  const top=(f)=>sc.map((s,i)=>[f(s,i),i]).sort((a,b)=>b[0]-a[0]).slice(0,K).map(x=>x[1]);
+  const res=new Set(this.lru);
+  const exact=top(s=>s);
+  const pick=this.biasOn?top((s,i)=>s+(res.has(i)?bias:0)):exact;
+  if(this.biasOn&&pick.some(i=>!exact.includes(i)))this.diff++;
+  const hit=[],miss=[];
+  for(const i of pick){
+    const at=this.lru.indexOf(i);
+    if(at>=0){hit.push(i);this.lru.splice(at,1);}else miss.push(i);
+    this.lru.push(i);
+  }
+  while(this.lru.length>cap)this.lru.shift();
+  this.hits+=hit.length;this.miss+=miss.length;this.n++;this.win.push(miss.length);if(this.win.length>200)this.win.shift();
+  this.last={hit,miss};
+};
+const css=(v)=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function draw(sim,cv){
+  const x=cv.getContext("2d"),W=cv.width,H=cv.height,cols=24,rows=12,cw=W/cols,ch=H/rows;
+  const res=new Set(sim.lru),h=new Set(sim.last.hit),m=new Set(sim.last.miss);
+  x.clearRect(0,0,W,H);
+  for(let i=0;i<N;i++){
+    x.fillStyle=m.has(i)?css("--miss"):h.has(i)?css("--hit"):res.has(i)?css("--res"):css("--idle");
+    x.fillRect((i%cols)*cw+1,Math.floor(i/cols)*ch+1,cw-2,ch-2);
+  }
+}
+const s0=new Sim(false),s1=new Sim(true),$=(id)=>document.getElementById(id);
+let playing=true;
+function upd(){
+  const cap=+$("cap").value,bias=+$("bias").value/100;
+  $("capv").textContent=cap;$("biasv").textContent=bias.toFixed(2);
+  s0.step(cap,0);s1.step(cap,bias);
+  for(const [s,k] of [[s0,0],[s1,1]]){
+    draw(s,$("c"+k));
+    const tot=s.hits+s.miss;
+    $("h"+k).textContent=tot?(100*s.hits/tot).toFixed(0)+"%":"–";
+    $("m"+k).textContent=s.win.length?(s.win.reduce((a,b)=>a+b,0)/s.win.length).toFixed(1)+" of 8":"–";
+  }
+  $("d1").textContent=s1.n?(100*s1.diff/s1.n).toFixed(0)+"%":"–";
+}
+setInterval(()=>{if(playing)upd()},180);
+$("play").onclick=()=>{playing=!playing;$("play").textContent=playing?"Pause":"Play"};
+$("reset").onclick=()=>{s0.reset();s1.reset();upd()};
+$("cap").oninput=()=>{s0.reset();s1.reset()};
+$("bias").oninput=()=>{s1.reset();s0.reset()};
+upd();
+</script></body></html>
